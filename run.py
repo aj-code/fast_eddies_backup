@@ -1,4 +1,4 @@
-import io, sys, argparse, stat, shutil, tempfile, lzma
+import io, sys, argparse, stat, shutil, tempfile, lzma, binascii, json
 from datetime import timedelta
 from utils import *
 from b2 import B2Threaded
@@ -46,9 +46,9 @@ key_data = None
 
 
 
-def backup(key_file, dirs):
+def backup(dirs):
 
-    restore_db(key_file)
+    restore_db()
 
     with get_db(db_filename) as conn:
         cur = conn.cursor()
@@ -100,13 +100,13 @@ def backup(key_file, dirs):
                 cur.execute(SQL_COPY_FILE_HASH, (fast_check_id, file_id))
 
             else: #content changed, backup
-                dedup_and_store(key_file, cur, name, file_id)
+                dedup_and_store(cur, name, file_id)
 
 
-    save_db(key_file)
+    save_db()
 
 
-def dedup_and_store(key_file, cur, filepath, file_id):
+def dedup_and_store(cur, filepath, file_id):
     with open(filepath, 'rb') as f:
 
         block_count = 0
@@ -158,7 +158,7 @@ def copy_block_map(cur, from_id, to_id):
         cur.execute(SQL_INSERT_FILE_MAP, (to_id, block['block_id']))
 
 
-def restore(key_file, file_set_id, exclude_globs, include_globs, output_dir):
+def restore(file_set_id, exclude_globs, include_globs, output_dir):
 
     if not os.path.exists(output_dir):
         print('Restore dir does not exist, exiting.')
@@ -168,7 +168,7 @@ def restore(key_file, file_set_id, exclude_globs, include_globs, output_dir):
         print('Restore dir is not empty, exiting.')
         return
 
-    restore_db(key_file)
+    restore_db()
 
     with get_db(db_filename) as conn:
         file_results = conn.execute(SQL_SELECT_FILES_BY_SET, (file_set_id,)).fetchall()
@@ -288,9 +288,9 @@ def restore(key_file, file_set_id, exclude_globs, include_globs, output_dir):
             #note, perms not updated, because simlink perms are from the dest file
 
 
-def auto_delete_sets(key_file):
+def auto_delete_sets():
 
-    restore_db(key_file)
+    restore_db()
     with get_db(db_filename) as conn:
 
         sets = conn.execute(SQL_SELECT_SETS).fetchall()
@@ -303,7 +303,7 @@ def auto_delete_sets(key_file):
             if len(week_sets) > 1:
                 # delete oldest
                 for s in week_sets[1:]:
-                    delete_set(key_file, s['id'])
+                    delete_set(s['id'])
 
         # handle 1 to 5 months ago, keep one per month
         for months_ago in range(2, 6):
@@ -312,21 +312,21 @@ def auto_delete_sets(key_file):
             if len(month_sets) > 1:
                 # delete oldest
                 for s in month_sets[1:]:
-                    delete_set(key_file, s['id'])
+                    delete_set(s['id'])
 
         # handle more than 6 months, delete all
         for s in sets:
             six_months = timedelta(days=30 * 6)
             if sqlite_date_to_datetime(s['created']) < now - six_months:
-                delete_set(key_file, s['id'])
+                delete_set(s['id'])
 
 
-def delete_set(key_file, file_set_id):
+def delete_set(file_set_id):
 
     if verbose:
         print('Deleting backup set: ', file_set_id)
 
-    restore_db(key_file)
+    restore_db()
     with get_db(db_filename) as conn:
         cur = conn.cursor()
 
@@ -351,12 +351,12 @@ def delete_set(key_file, file_set_id):
         cur.close()
         conn.execute('VACUUM')
 
-    save_db(key_file)
+    save_db()
 
 
-def verify_and_clean(key_file, delete_unrecoverable):
+def verify_and_clean(delete_unrecoverable):
 
-    restore_db(key_file)
+    restore_db()
     with get_db(db_filename) as conn:
 
         if verbose:
@@ -427,7 +427,7 @@ def verify_and_clean(key_file, delete_unrecoverable):
 
 
     if is_db_modified:
-        save_db(key_file)
+        save_db()
 
     if verbose:
         print('Complete.')
@@ -483,7 +483,7 @@ def write_block(block_id, block_data):
     b2_threaded.upload(str(block_id), encrypted)
 
 
-def save_db(key_file):
+def save_db():
 
     cache_filename = os.path.join(cache_dir, METADATA_STORE_FILENAME)
     with open(cache_filename, 'wb') as enc_db:
@@ -523,7 +523,7 @@ def save_db(key_file):
         b2_threaded.wait_on_all_complete()
 
 
-def restore_db(key_file):
+def restore_db():
 
     use_cache = False
     cache_filename = os.path.join(cache_dir, METADATA_STORE_FILENAME)
@@ -640,9 +640,9 @@ def load_keyfile(key_file):
     return key_data
 
 
-def list_sets(key_file):
+def list_sets():
 
-    restore_db(key_file)
+    restore_db()
     with get_db(db_filename) as conn:
 
         print('ID\t\tCreated')
@@ -655,9 +655,9 @@ def list_sets(key_file):
         print()
 
 
-def list_files(key_file, set_id):
+def list_files(set_id):
 
-    restore_db(key_file)
+    restore_db()
     with get_db(db_filename) as conn:
 
         names = []
@@ -674,8 +674,8 @@ def list_files(key_file, set_id):
             print(n)
 
 
-def download_metadata(key_file, dest_path):
-    restore_db(key_file)
+def download_metadata(dest_path):
+    restore_db()
     shutil.copy(db_filename, dest_path)
 
     print("Metadata SQLite database stored at:", dest_path)
@@ -735,28 +735,28 @@ def main():
 
 
     if args.mode == 'listsets':
-        list_sets(args.key_file)
+        list_sets()
 
     if args.mode == 'autodeletesets':
-        auto_delete_sets(args.key_file)
+        auto_delete_sets()
 
     if args.mode == 'deleteset':
         if not args.file_set:
             print("--file-set missing")
         else:
-            delete_set(args.key_file, args.file_set)
+            delete_set(args.file_set)
 
     if args.mode == 'listfiles':
         if not args.file_set:
             print("--file-set missing")
         else:
-            list_files(args.key_file, args.file_set)
+            list_files(args.file_set)
 
     if args.mode == 'verifyandclean':
-        verify_and_clean(args.key_file, args.delete_unrecoverable)
+        verify_and_clean(args.delete_unrecoverable)
 
     if args.mode == 'downloadmetadata':
-        download_metadata(args.key_file, 'backup_metadata.db')
+        download_metadata('backup_metadata.db')
 
     if args.mode == 'backup':
         if not args.include:
@@ -765,7 +765,7 @@ def main():
             print('--exclude only supported during restore')
         else:
             include_dirs = [item for sublist in args.include for item in sublist]
-            backup(args.key_file, include_dirs)
+            backup(include_dirs)
 
     if args.mode == 'restore':
         if not args.output_dir:
@@ -781,7 +781,7 @@ def main():
             if args.include:
                 include_globs = [item for sublist in args.include for item in sublist]
 
-            restore(args.key_file, args.file_set, exclude_globs, include_globs, args.output_dir)
+            restore(args.file_set, exclude_globs, include_globs, args.output_dir)
 
 
 if __name__ == "__main__":
