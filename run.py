@@ -292,36 +292,39 @@ def auto_delete_sets():
 
     restore_db()
     with get_db(db_filename) as conn:
-
         sets = conn.execute(SQL_SELECT_SETS).fetchall()
-        now = datetime.now()
 
-        # handle between 1 and 4 weeks, keep one per week
-        for weeks_ago in range(2, 5):
-            start_time = now - timedelta(days=weeks_ago * 7)
-            week_sets = get_sets_within_time(sets, start_time, timedelta(days=7))
-            if len(week_sets) > 1:
-                # delete oldest
-                for s in week_sets[1:]:
-                    delete_set(s['id'])
+    now = datetime.now()
 
-        # handle 1 to 5 months ago, keep one per month
-        for months_ago in range(2, 6):
-            start_time = now - timedelta(days=months_ago * 30)
-            month_sets = get_sets_within_time(sets, start_time, timedelta(days=30))
-            if len(month_sets) > 1:
-                # delete oldest
-                for s in month_sets[1:]:
-                    delete_set(s['id'])
+    # handle between 1 and 4 weeks, keep one per week
+    for weeks_ago in range(2, 5):
+        start_time = now - timedelta(days=weeks_ago * 7)
+        week_sets = get_sets_within_time(sets, start_time, timedelta(days=7))
+        if len(week_sets) > 1:
+            # delete oldest
+            for s in week_sets[1:]:
+                delete_set(s['id'], do_vacuum=False)
 
-        # handle more than 6 months, delete all
-        for s in sets:
-            six_months = timedelta(days=30 * 6)
-            if sqlite_date_to_datetime(s['created']) < now - six_months:
-                delete_set(s['id'])
+    # handle 1 to 5 months ago, keep one per month
+    for months_ago in range(2, 6):
+        start_time = now - timedelta(days=months_ago * 30)
+        month_sets = get_sets_within_time(sets, start_time, timedelta(days=30))
+        if len(month_sets) > 1:
+            # delete oldest
+            for s in month_sets[1:]:
+                delete_set(s['id'], do_vacuum=False)
+
+    # handle more than 6 months, delete all
+    for s in sets:
+        six_months = timedelta(days=30 * 6)
+        if sqlite_date_to_datetime(s['created']) < now - six_months:
+            delete_set(s['id'], do_vacuum=False)
+
+    with get_db(db_filename) as conn: #compact db
+        conn.execute('VACUUM')
 
 
-def delete_set(file_set_id):
+def delete_set(file_set_id, do_vacuum=True):
 
     if verbose:
         print('Deleting backup set: ', file_set_id)
@@ -349,7 +352,9 @@ def delete_set(file_set_id):
             delete_file(cur, f['id'], known_b2_files)
 
         cur.close()
-        conn.execute('VACUUM')
+
+        if do_vacuum:
+            conn.execute('VACUUM')
 
     save_db()
 
