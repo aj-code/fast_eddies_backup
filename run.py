@@ -600,10 +600,8 @@ def restore_db():
         sys.exit(1)
 
     #migrate from old metadata formats
-    if metadata_version == 1:
-        if verbose:
-            print('Migrating to metadata v2')
-        migrate_db_1_to_2(db_filename)
+    if metadata_version != METADATA_STORE_VERSION:
+        raise RuntimeError('Incorrect metadata version and upgrade not supported. You may need to empty your B2 bucket and start a fresh backup.')
 
 
 def gen_keyfile(key_file):

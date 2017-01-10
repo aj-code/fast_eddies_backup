@@ -200,30 +200,6 @@ def create_table(conn):
     conn.execute(sql)
 
 
-def migrate_db_1_to_2(db_filename):
-    """Files now use dir_id as prefix, instead of storing entire path"""
-
-    with get_db(db_filename) as conn:
-
-        cache = {}
-
-        conn.execute('ALTER TABLE file ADD COLUMN dir_id INTEGER')
-
-        for r in conn.execute('SELECT id, name FROM file').fetchall():
-            name = os.path.basename(r['name'])
-            dir = os.path.dirname(r['name'])
-
-            if dir in cache:
-                id = cache[dir]
-            else:
-                t = conn.execute('SELECT id FROM dir WHERE name = ?', (dir,)).fetchone()
-                id = t['id']
-                cache[dir] = id
-
-            conn.execute('UPDATE file SET dir_id = ?, name = ? WHERE id = ?', (id, name, r['id']))
-
-        conn.execute('VACUUM')
-
 
 class BlockWriter(threading.Thread):
     def __init__(self, key, block_format_version, verbose=False):
