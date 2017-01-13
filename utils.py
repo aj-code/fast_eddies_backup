@@ -76,6 +76,16 @@ def get_sets_within_time(sets, date, time_delta):
             results.append(s)
     return results
 
+def get_files_in_b2(b2_threaded):
+
+    future = b2_threaded.list_files()
+    future.lock.acquire()
+
+    known_b2_files = {}
+    for b2_file in future.response:
+        known_b2_files.setdefault(b2_file.name, []).append(b2_file)
+
+    return known_b2_files
 
 def sqlite_date_to_datetime(date_str):
     return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")

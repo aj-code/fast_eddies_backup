@@ -266,6 +266,8 @@ def auto_delete_sets():
 
     now = datetime.now()
 
+    sets_to_delete = []
+
     # handle between 1 and 4 weeks, keep one per week
     for weeks_ago in range(2, 5):
         start_time = now - timedelta(days=weeks_ago * 7)
@@ -273,7 +275,7 @@ def auto_delete_sets():
         if len(week_sets) > 1:
             # delete oldest
             for s in week_sets[1:]:
-                delete_set(s['id'], do_vacuum=False)
+                sets_to_delete.append(s['id'])
 
     # handle 1 to 5 months ago, keep one per month
     for months_ago in range(2, 6):
@@ -282,88 +284,105 @@ def auto_delete_sets():
         if len(month_sets) > 1:
             # delete oldest
             for s in month_sets[1:]:
-                delete_set(s['id'], do_vacuum=False)
+                sets_to_delete.append(s['id'])
+
 
     # handle more than 6 months, delete all
     for s in sets:
         six_months = timedelta(days=30 * 6)
         if sqlite_date_to_datetime(s['created']) < now - six_months:
-            delete_set(s['id'], do_vacuum=False)
+            sets_to_delete.append(s['id'])
+
+
+    if len(sets_to_delete) > 0: #defer actuall delete to here so we don't unnecessarily query all file in b2
+        known_b2_files = get_files_in_b2(b2_threaded)
+        for set_id in sets_to_delete:
+            _delete_set(conn, known_b2_files, set_id)
+
+        db.optimise_db(db_filename)
+        save_db()
+
+    elif verbose:
+        print('No backup sets found for deletion')
 
 
 
-#TODO abstract clean so can call muliple times with out restore/save/optimise db
-known_b2_files = None #cache in case we're delete multiple sets
-def delete_set(backup_set_id, do_vacuum=True):
+def delete_set(backup_set_id):
+    restore_db()
+
+    known_b2_files = get_files_in_b2(b2_threaded)
+
+    with db.get_db(db_filename) as conn:
+        _delete_set(conn, known_b2_files, backup_set_id)
+
+    db.optimise_db(db_filename)
+    save_db()
+
+
+def _delete_set(conn, known_b2_files, backup_set_id):
 
     if verbose:
         print('Deleting backup set: ', backup_set_id)
 
-    restore_db()
-    with db.get_db(db_filename) as conn:
-        cur = conn.cursor()
+    cur = conn.cursor()
 
-        cur.execute(db.SQL_DELETE_SET, (backup_set_id,))
-        if cur.rowcount == 0:
-            print("Backup set doesn't exist. Failing.")
-            return
+    cur.execute(db.SQL_DELETE_SET, (backup_set_id,))
+    if cur.rowcount == 0:
+        print("Backup set doesn't exist. Failing.")
+        return
 
-        global known_b2_files
-        if not known_b2_files:
-            future = b2_threaded.list_files()
-            future.lock.acquire()
+    if not known_b2_files:
+        future = b2_threaded.list_files()
+        future.lock.acquire()
 
-            known_b2_files = {}
-            for b2_file in future.response:
-                known_b2_files.setdefault(b2_file.name, []).append(b2_file)
+        known_b2_files = {}
+        for b2_file in future.response:
+            known_b2_files.setdefault(b2_file.name, []).append(b2_file)
 
-        dir_results, symlink_results, file_results = db.get_results_for_set(cur, backup_set_id)
+    dir_results, symlink_results, file_results = db.get_results_for_set(cur, backup_set_id)
 
-        #del files
-        for f in file_results:
-            if verbose:
-                full_name = os.path.join(f['dir_name'], f['name'])
-                print('Deleting: set(%d) %s' % (backup_set_id, full_name))
+    #del files
+    for f in file_results:
+        if verbose:
+            full_name = os.path.join(f['dir_name'], f['name'])
+            print('Deleting: set(%d) %s' % (backup_set_id, full_name))
 
-            result = cur.execute(db.SQL_SELECT_OTHER_SET_FILE_MAP_COUNT, (backup_set_id, f['id'])).fetchone()
-            if result['count'] == 0: #file not used in other set
-                delete_file(cur, f['id'], known_b2_files)
+        result = cur.execute(db.SQL_SELECT_OTHER_SET_FILE_MAP_COUNT, (backup_set_id, f['id'])).fetchone()
+        if result['count'] == 0: #file not used in other set
+            delete_file(cur, f['id'], known_b2_files)
 
-            #delete mapping
-            cur.execute(db.SQL_DELETE_SET_FILE_MAP, (backup_set_id, f['id']))
+        #delete mapping
+        cur.execute(db.SQL_DELETE_SET_FILE_MAP, (backup_set_id, f['id']))
 
 
-        #del symlinks
-        for s in symlink_results:
-            if verbose:
-                print('Deleting: set(%d) %s' % (backup_set_id, s['name']))
+    #del symlinks
+    for s in symlink_results:
+        if verbose:
+            print('Deleting: set(%d) %s' % (backup_set_id, s['name']))
 
-            result = cur.execute(db.SQL_SELECT_OTHER_SET_SYMLINK_MAP_COUNT, (backup_set_id, s['id'])).fetchone()
-            if result['count'] == 0: #file not used in other set
-                cur.execute(db.SQL_DELETE_SYMLINK, (s['id'],))
+        result = cur.execute(db.SQL_SELECT_OTHER_SET_SYMLINK_MAP_COUNT, (backup_set_id, s['id'])).fetchone()
+        if result['count'] == 0: #file not used in other set
+            cur.execute(db.SQL_DELETE_SYMLINK, (s['id'],))
 
-            #delete mapping
-            cur.execute(db.SQL_DELETE_SET_SYMLINK_MAP, (backup_set_id, s['id']))
+        #delete mapping
+        cur.execute(db.SQL_DELETE_SET_SYMLINK_MAP, (backup_set_id, s['id']))
 
-        #del dirs
-        for d in dir_results:
-            if verbose:
-                print('Deleting: set(%d) %s' % (backup_set_id, d['name']))
+    #del dirs
+    for d in dir_results:
+        if verbose:
+            print('Deleting: set(%d) %s' % (backup_set_id, d['name']))
 
-            result = cur.execute(db.SQL_SELECT_OTHER_SET_DIR_MAP_COUNT, (backup_set_id, d['id'])).fetchone()
-            if result['count'] == 0: #file not used in other set
-                cur.execute(db.SQL_DELETE_DIR, (d['id'],))
+        result = cur.execute(db.SQL_SELECT_OTHER_SET_DIR_MAP_COUNT, (backup_set_id, d['id'])).fetchone()
+        if result['count'] == 0: #file not used in other set
+            cur.execute(db.SQL_DELETE_DIR, (d['id'],))
 
-            #delete mapping
-            cur.execute(db.SQL_DELETE_SET_DIR_MAP, (backup_set_id, d['id']))
-
-
-        cur.close()
-        conn.commit()
+        #delete mapping
+        cur.execute(db.SQL_DELETE_SET_DIR_MAP, (backup_set_id, d['id']))
 
 
-    db.optimise_db(db_filename)
-    save_db()
+    cur.close()
+    conn.commit()
+
 
 
 def verify_and_clean(delete_unrecoverable):
@@ -499,6 +518,7 @@ def write_block(block_id, block_data):
     b2_threaded.upload(str(block_id), encrypted)
 
 
+#TODO, delete previous metadata entry in b2
 def save_db():
 
     cache_filename = os.path.join(cache_dir, METADATA_STORE_FILENAME)
