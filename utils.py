@@ -1,4 +1,4 @@
-import sqlite3, os, struct, threading, gzip, queue, hashlib, fnmatch
+import os, struct, threading, gzip, queue, hashlib, fnmatch
 from datetime import datetime
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
@@ -39,17 +39,6 @@ def get_files(dirs):
             for name in dirs:
                 abs_name = os.path.join(root, name)
                 yield abs_name, True, os.path.islink(abs_name)
-
-
-def get_db(db_filename):
-    need_create_table = not os.path.exists(db_filename)
-
-    conn = sqlite3.connect(db_filename)
-    if need_create_table:
-        create_table(conn)
-
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def encrypt_block(key, block_version, block_data):
@@ -119,86 +108,6 @@ def read_range(file, start, size):
         data = file.read(max_read)
         total_read += len(data)
         yield data
-
-
-
-
-
-
-
-
-
-
-def create_table(conn):
-    sql = """CREATE TABLE file_set (
-				id INTEGER PRIMARY KEY,
-				created TEXT DEFAULT CURRENT_TIMESTAMP
-			 );
-		"""
-    conn.execute(sql)
-
-    sql = """CREATE TABLE file (
-				id INTEGER PRIMARY KEY,
-				name TEXT,
-				dir_id INTEGER,
-				uid INTEGER,
-				gid INTEGER,
-				permissions INTEGER,
-				modified_time REAL,
-				size INTEGER,
-				hash BLOB,
-				file_set_id INTEGER
-			);
-		"""
-    conn.execute(sql)
-
-    sql = "CREATE INDEX file_size_index ON file (size);"  # index for fast check to see if file changed
-    conn.execute(sql)
-
-    sql = """CREATE TABLE simlink (
-				id INTEGER PRIMARY KEY,
-				name TEXT,
-				dest TEXT,
-				file_set_id INTEGER
-			);
-		"""
-    conn.execute(sql)
-
-    sql = """CREATE TABLE dir (
-				id INTEGER PRIMARY KEY,
-				name TEXT,
-				uid INTEGER,
-				gid INTEGER,
-				permissions INTEGER,
-				file_set_id INTEGER
-			);
-		"""
-    conn.execute(sql)
-
-    sql = """CREATE TABLE file_map (
-			id INTEGER PRIMARY KEY,
-			file_id INTEGER,
-			block_id INTEGER
-		);
-	"""
-    conn.execute(sql)
-
-    sql = "CREATE INDEX map_file_id_index ON file_map (file_id);"
-    conn.execute(sql)
-
-    sql = "CREATE INDEX map_block_id_index ON file_map (block_id);"
-    conn.execute(sql)
-
-    sql = """CREATE TABLE block (
-				id INTEGER PRIMARY KEY,
-				hash BLOB
-			 );
-		"""
-    conn.execute(sql)
-
-    sql = "CREATE INDEX hash_index ON block (hash);"
-    conn.execute(sql)
-
 
 
 class BlockWriter(threading.Thread):

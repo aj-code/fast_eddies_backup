@@ -1,42 +1,17 @@
 import io, sys, argparse, stat, shutil, tempfile, lzma, binascii, json
 from datetime import timedelta
+
+import db
 from utils import *
 from b2 import B2Threaded
 
 
 BLOCK_SIZE = 256 * 1024
 BLOCK_FORMAT_VERSION = 1
-METADATA_STORE_VERSION = 2
+METADATA_STORE_VERSION = 3
 METADATA_STORE_FILENAME = 'metadata'
 METADATA_STORE_HEADER = b'BACKUP_METADATA'
 
-SQL_COPY_FILE_HASH = 'UPDATE file SET hash = (SELECT hash FROM file WHERE id = ?) WHERE id = ?'
-SQL_DELETE_SET = 'DELETE FROM file_set WHERE id = ?'
-SQL_DELETE_FILE = 'DELETE FROM file WHERE id = ?'
-SQL_DELETE_FILE_MAPS = 'DELETE FROM file_map WHERE id IN (%s)'
-SQL_DELETE_BLOCKS = 'DELETE FROM block WHERE id IN (%s)'
-SQL_INSERT_BLOCK = 'INSERT INTO block (hash) VALUES (?)'
-SQL_INSERT_DIR = 'INSERT INTO dir (name, uid, gid, permissions, file_set_id) VALUES (?,?,?,?,?)'
-SQL_INSERT_FILE = 'INSERT INTO file (name, dir_id, uid, gid, permissions, modified_time, size, file_set_id) VALUES (?,?,?,?,?,?,?,?)'
-SQL_INSERT_FILE_MAP = 'INSERT INTO file_map (file_id, block_id) VALUES (?,?)'
-SQL_INSERT_FILE_SET = 'INSERT INTO file_set DEFAULT VALUES'
-SQL_INSERT_SIMLINK = 'INSERT INTO simlink (name, dest, file_set_id) VALUES (?,?,?)'
-SQL_SELECT_BLOCK_BY_HASH = 'SELECT id FROM block WHERE hash = ?'
-SQL_SELECT_BLOCK_BY_ID = 'SELECT id FROM block WHERE id = ?'
-SQL_SELECT_BLOCKS = 'SELECT id FROM block'
-SQL_SELECT_DIRS = 'SELECT * FROM dir WHERE file_set_id = ?'
-SQL_SELECT_DIR_BY_NAME = 'SELECT id FROM dir WHERE name = ?'
-SQL_SELECT_FILE_BLOCKS = 'SELECT block_id FROM file_map WHERE file_id = ? ORDER BY id ASC'
-SQL_SELECT_FILES_BY_SET = 'SELECT file.*, dir.name as dirname FROM file, dir WHERE dir.id = file.dir_id AND file.file_set_id = ?'
-SQL_SELECT_LIKELY_PREV_SET_FILE = """SELECT file.id, file.name, dir.name as dirname
-                                       FROM file JOIN dir ON dir.id = file.dir_id
-                                       WHERE file.name = ? AND file.modified_time = ? AND file.size = ?
-                                       AND file.file_set_id = (SELECT id FROM file_set ORDER BY created DESC LIMIT 1,1)"""
-SQL_SELECT_SETS = 'SELECT * FROM file_set ORDER BY created DESC'
-SQL_SELECT_SIMLINKS = 'SELECT * FROM simlink WHERE file_set_id = ?'
-SQL_SELECT_FILE_BY_BLOCK = 'SELECT file.* FROM file, file_map, block WHERE file.id = file_map.file_id AND file_map.block_id = block.id AND block.id = ?'
-SQL_SELECT_BLOCK_AND_COUNT_BY_FILE = 'SELECT m1.id, m1.block_id, (SELECT COUNT(id) FROM file_map as m2 WHERE block_id = m1.block_id) as count FROM file_map as m1 WHERE file_id = ?'
-SQL_UPDATE_FILE_HASH = 'UPDATE file SET hash = ? WHERE id = ?'
 
 verbose = False
 db_filename = None
@@ -50,57 +25,59 @@ def backup(dirs):
 
     restore_db()
 
-    with get_db(db_filename) as conn:
+    with db.get_db(db_filename) as conn:
         cur = conn.cursor()
 
-        cur.execute(SQL_INSERT_FILE_SET)
-        file_set_id = cur.lastrowid
+        cur.execute(db.SQL_INSERT_FILE_SET)
+        backup_set_id = cur.lastrowid
 
         dir_cache = {}
 
-        for name, is_dir, is_simlink in get_files(dirs):
+        for name, is_dir, is_symlink in get_files(dirs):
 
             if verbose:
                 print('Processing', name)
 
+            name = os.path.abspath(name)
+
             st = os.stat(name, follow_symlinks=False)
 
-            if is_simlink: #handle simlink
+            if is_symlink: #handle symlink
                 link_dest = os.readlink(name)
-                cur.execute(SQL_INSERT_SIMLINK, (name, link_dest, file_set_id))
+                db.handle_symlink(cur, backup_set_id, name, link_dest)
                 continue
 
             if is_dir: #save dir permissions
-                cur.execute(SQL_INSERT_DIR, (name, st.st_uid, st.st_gid, st.st_mode, file_set_id))
-                dir_cache[name] = cur.lastrowid
+                set_dir_id = db.handle_dir(cur, name, backup_set_id, st)
+                dir_cache[name] = set_dir_id
                 continue
 
-            if os.path.dirname(name) not in dir_cache:
-                raise RuntimeError('BUG: dir id not found in cache, filesystem walk probably wrong order. Failing.')
+            dir_name = os.path.dirname(name)
+            if dir_name not in dir_cache:
+                raise RuntimeError('BUG: set dir id not found in cache, filesystem walk probably wrong order. Failing.')
 
             file_name = os.path.basename(name)
-            dir_id = dir_cache[os.path.dirname(name)]
+            set_dir_id = dir_cache[dir_name]
 
 
-            # fast check for content unchanged, check size and modified time against last known entry of this file
-            fast_check_id = None
-            results = cur.execute(SQL_SELECT_LIKELY_PREV_SET_FILE, (file_name, st.st_mtime, st.st_size)).fetchall()
-            for r in results:
-                if os.path.join(r['dirname'], file_name) == name: #also check dir is the same
-                    fast_check_id = r['id']
+            prev_file = db.get_prev_file(cur, file_name, dir_name, st)
 
-            cur.execute(SQL_INSERT_FILE, (file_name, dir_id, st.st_uid, st.st_gid, st.st_mode, st.st_mtime, st.st_size, file_set_id))
-            file_id = cur.lastrowid
+            #check if new file, or perms have changed do normal backup of file
+            #note: in future we could optimise for only perm/owner changes by copying file block map in db instead of scanning file
+            if not prev_file:
+                if verbose:
+                    print('File new or changed, backing up')
 
-            if fast_check_id: #file unchanged
+                file_id = db.insert_file_for_set(cur, backup_set_id, file_name, set_dir_id, st)
+                dedup_and_store(cur, name, file_id)
+
+            else: #exact file already exists
+
                 if verbose:
                     print('File unchanged, updating metadata and continuing')
 
-                copy_block_map(cur, fast_check_id, file_id)
-                cur.execute(SQL_COPY_FILE_HASH, (fast_check_id, file_id))
-
-            else: #content changed, backup
-                dedup_and_store(cur, name, file_id)
+                file_id = prev_file['id']
+                db.map_existing_file_to_set(cur, backup_set_id, file_id)
 
 
     save_db()
@@ -121,44 +98,33 @@ def dedup_and_store(cur, filepath, file_id):
 
             block_hasher = hashlib.sha256()
             block_hasher.update(block_data)
-            hash = block_hasher.digest()[16:]  # only take 128 bits
+            block_hash = block_hasher.digest()[16:]  # only take 128 bits
 
             file_hasher.update(block_data)
 
-            existing_block = cur.execute(SQL_SELECT_BLOCK_BY_HASH, (hash,)).fetchone()
-            if existing_block:
+            block_id, is_new_block = db.find_or_insert_block(cur, block_hash)
+
+            cur.execute(db.SQL_INSERT_FILE_MAP, (file_id, block_id))
+
+            if is_new_block:
                 dup_count += 1
-                block_id = existing_block['id']
-            else:
-                cur.execute(SQL_INSERT_BLOCK, (hash,))
-                block_id = cur.lastrowid
-
-            cur.execute(SQL_INSERT_FILE_MAP, (file_id, block_id))
-
-            if not existing_block:
                 write_block(block_id, block_data)
 
             block_count += 1
 
-        cur.execute(SQL_UPDATE_FILE_HASH, (file_hasher.digest()[16:], file_id))
+        cur.execute(db.SQL_UPDATE_FILE_HASH, (file_hasher.digest()[16:], file_id))
 
         if verbose:
             print(filepath)
             if block_count > 0:
-                print('\tDup block count: %d / %d = %f%%' % (dup_count, block_count, (((dup_count / block_count) * 100))))
+                print('\tDup block count: %d / %d = %f%%' % (dup_count, block_count, ((dup_count / block_count) * 100)))
                 print('\tSaved: {0}M'.format((dup_count * BLOCK_SIZE) / (1024 * 1024)))
             else:
                 print('\tEmpty file')
 
 
-def copy_block_map(cur, from_id, to_id):
 
-    blocks = cur.execute(SQL_SELECT_FILE_BLOCKS, (from_id,)).fetchall()
-    for block in blocks:
-        cur.execute(SQL_INSERT_FILE_MAP, (to_id, block['block_id']))
-
-
-def restore(file_set_id, exclude_globs, include_globs, output_dir):
+def restore(backup_set_id, exclude_globs, include_globs, output_dir):
 
     if not os.path.exists(output_dir):
         print('Restore dir does not exist, exiting.')
@@ -168,29 +134,26 @@ def restore(file_set_id, exclude_globs, include_globs, output_dir):
         print('Restore dir is not empty, exiting.')
         return
 
-    restore_db()
+    if not restore_db():
+        print("No previous backups exist, exiting.")
+        return
 
-    with get_db(db_filename) as conn:
-        file_results = conn.execute(SQL_SELECT_FILES_BY_SET, (file_set_id,)).fetchall()
-        simlink_results = conn.execute(SQL_SELECT_SIMLINKS, (file_set_id,)).fetchall()
-        dir_results = conn.execute(SQL_SELECT_DIRS, (file_set_id,)).fetchall()
+    with db.get_db(db_filename) as conn:
 
-        if not file_results and not simlink_results and not dir_results:
-            print('No files to restore or incorrect fileset.')
+        dir_results, symlink_results, file_results = db.get_results_for_set(conn, backup_set_id)
+
+        if not file_results and not symlink_results and not dir_results:
+            print('Nothing to restore or incorrect backup set.')
             return
 
-        common_path = os.path.commonpath([f['name'] for f in simlink_results + dir_results])
+        common_path = os.path.commonpath([f['name'] for f in symlink_results + dir_results]) #don't need to include file as those don't have full paths anyway
 
-        dir_cache = {}
         #restore dirs
         for r in dir_results:
-            dir_id = r['id']
             name = r['name']
             gid = r['gid']
             uid = r['uid']
             permissions = r['permissions']
-
-            dir_cache[dir_id] = name
 
             #skip exludes
             if exclude_globs and matches_any_glob(name, exclude_globs):
@@ -216,15 +179,14 @@ def restore(file_set_id, exclude_globs, include_globs, output_dir):
         block_writer.start()
         try:
             for r in file_results:
-                id = r['id']
+                file_id = r['id']
                 name = r['name']
-                dir_id = r['dir_id']
+                dir_name = r['dir_name']
                 size = r['size']
                 file_hash = r['hash']
 
                 permissions = (r['uid'], r['gid'], r['permissions'])
 
-                dir_name = dir_cache[dir_id]
                 new_path = os.path.join(output_dir, dir_name[len(common_path)+1:], name)
 
                 # skip excludes
@@ -242,7 +204,7 @@ def restore(file_set_id, exclude_globs, include_globs, output_dir):
                     print('File already exists in output directory. Bailing before data overwrite.')
                     return
 
-                block_results = conn.execute(SQL_SELECT_FILE_BLOCKS, (id,)).fetchall()
+                block_results = conn.execute(db.SQL_SELECT_FILE_BLOCKS, (file_id,)).fetchall()
                 total_blocks = len(block_results)
 
                 if verbose:
@@ -256,7 +218,7 @@ def restore(file_set_id, exclude_globs, include_globs, output_dir):
                     fd.seek(0)
 
                 file_offset = 0
-                for br in block_results:
+                for br in block_results: #block_results must be sorted
                     block_id = br['block_id']
 
                     future = b2_threaded.download(block_id, stream=False)
@@ -268,12 +230,17 @@ def restore(file_set_id, exclude_globs, include_globs, output_dir):
             block_writer.shutdown()
 
 
-        #restore simlinks
-        for r in simlink_results:
+        #restore symlinks
+        for r in symlink_results:
             name = r['name']
             dest = r['dest']
 
-            if matches_any_glob(name, exclude_globs):
+            #skip exludes
+            if exclude_globs and matches_any_glob(name, exclude_globs):
+                continue
+
+            #skip not included
+            if include_globs and not matches_any_glob(name, include_globs):
                 continue
 
             new_path = os.path.join(output_dir, name[len(common_path) + 1:])
@@ -285,14 +252,17 @@ def restore(file_set_id, exclude_globs, include_globs, output_dir):
 
             os.symlink(dest, new_path)
 
-            #note, perms not updated, because simlink perms are from the dest file
+            #note, perms not updated, because symlink perms are from the dest file
 
 
 def auto_delete_sets():
 
-    restore_db()
-    with get_db(db_filename) as conn:
-        sets = conn.execute(SQL_SELECT_SETS).fetchall()
+    if not restore_db():
+        print("No previous backups exist, exiting.")
+        return
+
+    with db.get_db(db_filename) as conn:
+        sets = conn.execute(db.SQL_SELECT_SETS).fetchall()
 
     now = datetime.now()
 
@@ -320,49 +290,90 @@ def auto_delete_sets():
         if sqlite_date_to_datetime(s['created']) < now - six_months:
             delete_set(s['id'], do_vacuum=False)
 
-    with get_db(db_filename) as conn: #compact db
-        conn.execute('VACUUM')
 
 
-def delete_set(file_set_id, do_vacuum=True):
+#TODO abstract clean so can call muliple times with out restore/save/optimise db
+known_b2_files = None #cache in case we're delete multiple sets
+def delete_set(backup_set_id, do_vacuum=True):
 
     if verbose:
-        print('Deleting backup set: ', file_set_id)
+        print('Deleting backup set: ', backup_set_id)
 
     restore_db()
-    with get_db(db_filename) as conn:
+    with db.get_db(db_filename) as conn:
         cur = conn.cursor()
 
-        cur.execute(SQL_DELETE_SET, (file_set_id,))
+        cur.execute(db.SQL_DELETE_SET, (backup_set_id,))
         if cur.rowcount == 0:
-            print("File set doesn't exist. Failing.")
+            print("Backup set doesn't exist. Failing.")
             return
 
-        future = b2_threaded.list_files()
-        future.lock.acquire()
+        global known_b2_files
+        if not known_b2_files:
+            future = b2_threaded.list_files()
+            future.lock.acquire()
 
-        known_b2_files = {}
-        for b2_file in future.response:
-            known_b2_files.setdefault(b2_file.name, []).append(b2_file)
+            known_b2_files = {}
+            for b2_file in future.response:
+                known_b2_files.setdefault(b2_file.name, []).append(b2_file)
 
-        results = cur.execute(SQL_SELECT_FILES_BY_SET, (file_set_id,)).fetchall()
-        for f in results:
+        dir_results, symlink_results, file_results = db.get_results_for_set(cur, backup_set_id)
+
+        #del files
+        for f in file_results:
             if verbose:
-                print('Deleting: set(%d) %s' % (file_set_id, f['name']))
-            delete_file(cur, f['id'], known_b2_files)
+                full_name = os.path.join(f['dir_name'], f['name'])
+                print('Deleting: set(%d) %s' % (backup_set_id, full_name))
+
+            result = cur.execute(db.SQL_SELECT_OTHER_SET_FILE_MAP_COUNT, (backup_set_id, f['id'])).fetchone()
+            if result['count'] == 0: #file not used in other set
+                delete_file(cur, f['id'], known_b2_files)
+
+            #delete mapping
+            cur.execute(db.SQL_DELETE_SET_FILE_MAP, (backup_set_id, f['id']))
+
+
+        #del symlinks
+        for s in symlink_results:
+            if verbose:
+                print('Deleting: set(%d) %s' % (backup_set_id, s['name']))
+
+            result = cur.execute(db.SQL_SELECT_OTHER_SET_SYMLINK_MAP_COUNT, (backup_set_id, s['id'])).fetchone()
+            if result['count'] == 0: #file not used in other set
+                cur.execute(db.SQL_DELETE_SYMLINK, (s['id'],))
+
+            #delete mapping
+            cur.execute(db.SQL_DELETE_SET_SYMLINK_MAP, (backup_set_id, s['id']))
+
+        #del dirs
+        for d in dir_results:
+            if verbose:
+                print('Deleting: set(%d) %s' % (backup_set_id, d['name']))
+
+            result = cur.execute(db.SQL_SELECT_OTHER_SET_DIR_MAP_COUNT, (backup_set_id, d['id'])).fetchone()
+            if result['count'] == 0: #file not used in other set
+                cur.execute(db.SQL_DELETE_DIR, (d['id'],))
+
+            #delete mapping
+            cur.execute(db.SQL_DELETE_SET_DIR_MAP, (backup_set_id, d['id']))
+
 
         cur.close()
+        conn.commit()
 
-        if do_vacuum:
-            conn.execute('VACUUM')
 
+    db.optimise_db(db_filename)
     save_db()
 
 
 def verify_and_clean(delete_unrecoverable):
 
-    restore_db()
-    with get_db(db_filename) as conn:
+    if not restore_db():
+        print("No previous backups exist, exiting.")
+        return
+
+
+    with db.get_db(db_filename) as conn:
 
         if verbose:
             print('Downloading B2 file list')
@@ -392,7 +403,7 @@ def verify_and_clean(delete_unrecoverable):
 
             #check block is in the db, or metadata
             if f.name != METADATA_STORE_FILENAME:
-                result = conn.execute(SQL_SELECT_BLOCK_BY_ID, (f.name,)).fetchone()
+                result = conn.execute(db.SQL_SELECT_BLOCK_BY_ID, (f.name,)).fetchone()
                 if not result:
                     if verbose:
                         print('Old unused data discovered for deletion:', f.name)
@@ -405,7 +416,7 @@ def verify_and_clean(delete_unrecoverable):
 
         #ensure we have something in b2 for each block
         missing = []
-        for b in conn.execute(SQL_SELECT_BLOCKS).fetchall():
+        for b in conn.execute(db.SQL_SELECT_BLOCKS).fetchall():
             if str(b['id']) not in known_b2_files:
                 missing.append(b['id'])
 
@@ -422,8 +433,8 @@ def verify_and_clean(delete_unrecoverable):
             print()
             print("The following files are affected:")
             for b_id in missing:
-                for f in conn.execute(SQL_SELECT_FILE_BY_BLOCK, (b_id,)).fetchall():
-                    print('Set(%d): %s' % (f['file_set_id'], f['name']))
+                for f in conn.execute(db.SQL_SELECT_FILE_BY_BLOCK, (b_id,)).fetchall():
+                    print('Set(%d): %s' % (f['backup_set_id'], f['name']))
                     if delete_unrecoverable:
                         print('\tdeleting file.')
                         delete_file(conn, f['id'], known_b2_files)
@@ -440,12 +451,12 @@ def verify_and_clean(delete_unrecoverable):
 
 def delete_file(conn, file_id, known_b2_files):
 
-    conn.execute(SQL_DELETE_FILE, (file_id,))
+    conn.execute(db.SQL_DELETE_FILE, (file_id,))
 
     map_to_delete = []
-    block_to_delete = []
+    block_to_delete = set() #set because same file may reference same block mulitple times and we only need to delete once
 
-    results = conn.execute(SQL_SELECT_BLOCK_AND_COUNT_BY_FILE, (file_id,)).fetchall()
+    results = conn.execute(db.SQL_SELECT_BLOCK_AND_COUNT_BY_FILE, (file_id,file_id)).fetchall()
     count = 0
     total = len(results)
     for r in results:
@@ -453,8 +464,8 @@ def delete_file(conn, file_id, known_b2_files):
 
         map_to_delete.append(r['id'])
 
-        if r['count'] < 2: #only this file using it
-            block_to_delete.append(r['block_id'])
+        if r['other_count'] == 0: #only this file using it
+            block_to_delete.add(r['block_id'])
 
             key = str(r['block_id'])
             if key in known_b2_files: #might not exist in B2
@@ -464,7 +475,7 @@ def delete_file(conn, file_id, known_b2_files):
 
         #delete from db in chunks, or when loop is about done
         if len(map_to_delete) >= 100 or (count == total and map_to_delete):
-            sql = SQL_DELETE_FILE_MAPS % ', '.join('?' * len(map_to_delete))
+            sql = db.SQL_DELETE_FILE_BLOCK_MAPS % ', '.join('?' * len(map_to_delete))
             r = conn.execute(sql, map_to_delete)
             if verbose:
                 print('\tDeleted %d map entries' % r.rowcount)
@@ -472,12 +483,12 @@ def delete_file(conn, file_id, known_b2_files):
             map_to_delete = []
 
         if len(block_to_delete) >= 100 or (count == total and block_to_delete):
-            sql = SQL_DELETE_BLOCKS % ', '.join('?' * len(block_to_delete))
-            r = conn.execute(sql, block_to_delete)
+            sql = db.SQL_DELETE_BLOCKS % ', '.join('?' * len(block_to_delete))
+            r = conn.execute(sql, list(block_to_delete))
             if verbose:
                 print('\tDeleted %d block entries' % r.rowcount)
 
-            block_to_delete = []
+            block_to_delete = set()
 
 
 def write_block(block_id, block_data):
@@ -524,6 +535,7 @@ def save_db():
         print('Metatdata size:', os.stat(enc_db.name).st_size)
 
     with open(cache_filename, 'rb') as enc_db:
+        b2_threaded.wait_on_all_complete() #ensure all blocks are uploaded before metadata, better crash protection
         b2_threaded.upload(METADATA_STORE_FILENAME, enc_db)
         b2_threaded.wait_on_all_complete()
 
@@ -558,7 +570,7 @@ def restore_db():
             if verbose:
                 print("No metadata found to restore, no previous backups exist.")
                 print()
-            return
+            return False
 
         with open(cache_filename, 'wb') as f:
             try:
@@ -603,6 +615,8 @@ def restore_db():
     if metadata_version != METADATA_STORE_VERSION:
         raise RuntimeError('Incorrect metadata version and upgrade not supported. You may need to empty your B2 bucket and start a fresh backup.')
 
+    return True
+
 
 def gen_keyfile(key_file):
     if os.path.isfile(key_file):
@@ -645,32 +659,44 @@ def load_keyfile(key_file):
 
 def list_sets():
 
-    restore_db()
-    with get_db(db_filename) as conn:
+    if not restore_db():
+        print("No previous backups exist, exiting.")
+        return
+
+    with db.get_db(db_filename) as conn:
 
         print('ID\t\tCreated')
         print('========================')
 
-        results = conn.execute(SQL_SELECT_SETS).fetchall()
+        results = conn.execute(db.SQL_SELECT_SETS).fetchall()
         for r in results:
             print('%d\t\t%s' % (r['id'], r['created']))
 
         print()
 
 
-def list_files(set_id):
+def list_contents(backup_set_id):
 
-    restore_db()
-    with get_db(db_filename) as conn:
+    if not restore_db():
+        print("No previous backups exist, exiting.")
+        return
+
+    with db.get_db(db_filename) as conn:
+
+        dir_results, symlink_results, file_results = db.get_results_for_set(conn, backup_set_id)
 
         names = []
-        files_results = conn.execute(SQL_SELECT_FILES_BY_SET, (set_id,)).fetchall()
-        for r in files_results:
-            names.append(os.path.join(r['dirname'], r['name']))
+        for r in file_results:
+            names.append(os.path.join(r['dir_name'], r['name']))
 
-        simlink_results = conn.execute(SQL_SELECT_SIMLINKS, (set_id,)).fetchall()
-        for r in simlink_results:
+        for r in symlink_results:
             names.append(r['name'])
+
+        for r in dir_results:
+            names.append(r['name'])
+
+        if len(names) == 0:
+            print('Backup set incorrect or empty.')
 
         names.sort()
         for n in names:
@@ -678,7 +704,10 @@ def list_files(set_id):
 
 
 def download_metadata(dest_path):
-    restore_db()
+    if not restore_db():
+        print("No previous backups exist, exiting.")
+        return
+
     shutil.copy(db_filename, dest_path)
 
     print("Metadata SQLite database stored at:", dest_path)
@@ -692,12 +721,12 @@ def main():
     parser.add_argument('-k', '--key-file', help='Encryption keyfile, generate this with the genkey mode.',
                         required=True)
     parser.add_argument('--mode', help='Mode to run.',
-                        choices=['backup', 'restore', 'genkey', 'listsets', 'listfiles', 'deleteset', 'autodeletesets', 'verifyandclean', 'downloadmetadata'], required=True)
+                        choices=['backup', 'restore', 'genkey', 'listsets', 'listcontents', 'deleteset', 'autodeletesets', 'verifyandclean', 'downloadmetadata'], required=True)
     parser.add_argument('--include', metavar='directory', action='append',
                         help='One or more directories to backup.', nargs="+")
     parser.add_argument('--exclude', metavar='path glob', action='append',
                         help='Path glob to exclude from restore.', nargs="+")
-    parser.add_argument('-s', '--file-set', type=int,
+    parser.add_argument('-s', '--backup-set', type=int,
                         help='Which backup set to restore or delete, find this through the listsets mode.')
     parser.add_argument('--output-dir', help='Location to restore files to.')
     parser.add_argument('-v', '--verbose', help="increase output verbosity", action="store_true")
@@ -744,16 +773,16 @@ def main():
         auto_delete_sets()
 
     if args.mode == 'deleteset':
-        if not args.file_set:
-            print("--file-set missing")
+        if not args.backup_set:
+            print("--backup-set missing")
         else:
-            delete_set(args.file_set)
+            delete_set(args.backup_set)
 
-    if args.mode == 'listfiles':
-        if not args.file_set:
-            print("--file-set missing")
+    if args.mode == 'listcontents':
+        if not args.backup_set:
+            print("--backup-set missing")
         else:
-            list_files(args.file_set)
+            list_contents(args.backup_set)
 
     if args.mode == 'verifyandclean':
         verify_and_clean(args.delete_unrecoverable)
@@ -773,8 +802,8 @@ def main():
     if args.mode == 'restore':
         if not args.output_dir:
             print("--output-dir missing")
-        elif not args.file_set:
-            print("--file-set missing")
+        elif not args.backup_set:
+            print("--backup-set missing")
         else:
             exclude_globs = []
             if args.exclude:
@@ -784,7 +813,7 @@ def main():
             if args.include:
                 include_globs = [item for sublist in args.include for item in sublist]
 
-            restore(args.file_set, exclude_globs, include_globs, args.output_dir)
+            restore(args.backup_set, exclude_globs, include_globs, args.output_dir)
 
 
 if __name__ == "__main__":
