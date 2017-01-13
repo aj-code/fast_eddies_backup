@@ -87,7 +87,7 @@ def dedup_and_store(cur, filepath, file_id):
     with open(filepath, 'rb') as f:
 
         block_count = 0
-        dup_count = 0
+        new_count = 0
 
         file_hasher = hashlib.sha256()
         while True:
@@ -107,7 +107,7 @@ def dedup_and_store(cur, filepath, file_id):
             cur.execute(db.SQL_INSERT_FILE_MAP, (file_id, block_id))
 
             if is_new_block:
-                dup_count += 1
+                new_count += 1
                 write_block(block_id, block_data)
 
             block_count += 1
@@ -117,6 +117,7 @@ def dedup_and_store(cur, filepath, file_id):
         if verbose:
             print(filepath)
             if block_count > 0:
+                dup_count = (block_count-new_count)
                 print('\tDup block count: %d / %d = %f%%' % (dup_count, block_count, ((dup_count / block_count) * 100)))
                 print('\tSaved: {0}M'.format((dup_count * BLOCK_SIZE) / (1024 * 1024)))
             else:
