@@ -242,7 +242,7 @@ class _B2ThreadedWorker(threading.Thread):
                 req_data['startFileName'] = resp_data['nextFileName']
 
                 if self.verbose:
-                    print('Got',len(files), 'files so far, continuing')
+                    print('Got', len(files), 'objects so far, continuing')
             else:
                 future.response = files
                 future.lock.release()
