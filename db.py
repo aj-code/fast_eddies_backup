@@ -62,7 +62,7 @@ def create_table(conn):
 		"""
     conn.execute(sql)
 
-    sql = "CREATE INDEX file_size_index ON file (size);"  # index for fast check to see if file changed
+    sql = "CREATE INDEX file_size_and_modified_time_index ON file (size, modified_time);"  # index for fast check to see if file changed
     conn.execute(sql)
 
     sql = """CREATE TABLE symlink (
@@ -71,6 +71,9 @@ def create_table(conn):
 				dest TEXT
 			);
 		"""
+    conn.execute(sql)
+
+    sql = "CREATE INDEX symlink_name_index ON symlink (name);"
     conn.execute(sql)
 
     sql = """CREATE TABLE dir (
@@ -82,6 +85,11 @@ def create_table(conn):
 			);
 		"""
     conn.execute(sql)
+
+    sql = "CREATE INDEX dir_name_index ON dir (name);"
+    conn.execute(sql)
+
+
 
     sql = """CREATE TABLE file_block_map (
 			id INTEGER PRIMARY KEY,
@@ -100,6 +108,10 @@ def create_table(conn):
     	"""
     conn.execute(sql)
 
+    sql = "CREATE INDEX set_file_id_index ON set_file_map (file_id);"
+    conn.execute(sql)
+
+
     sql = """CREATE TABLE set_dir_map (
     			id INTEGER PRIMARY KEY,
     			set_id INTEGER,
@@ -108,6 +120,10 @@ def create_table(conn):
     	"""
     conn.execute(sql)
 
+    sql = "CREATE INDEX set_dir_id_index ON set_dir_map (dir_id);"
+    conn.execute(sql)
+
+
     sql = """CREATE TABLE set_symlink_map (
     			id INTEGER PRIMARY KEY,
     			set_id INTEGER,
@@ -115,6 +131,10 @@ def create_table(conn):
     		);
     	"""
     conn.execute(sql)
+
+    sql = "CREATE INDEX set_symlink_id_index ON set_symlink_map (symlink_id);"
+    conn.execute(sql)
+
 
     sql = "CREATE INDEX map_file_id_index ON file_block_map (file_id);"
     conn.execute(sql)
