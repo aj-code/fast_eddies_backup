@@ -1,5 +1,5 @@
 import io, sys, argparse, stat, shutil, tempfile, lzma, binascii, json
-from datetime import timedelta
+from datetime import timedelta, timezone
 
 import db
 from utils import *
@@ -691,7 +691,11 @@ def list_sets():
 
         results = conn.execute(db.SQL_SELECT_SETS).fetchall()
         for r in results:
-            print('%d\t\t%s' % (r['id'], r['created']))
+            #convert from UTC
+            created = sqlite_date_to_datetime(r['created']).replace(tzinfo=timezone.utc).astimezone(tz=None)
+            created_str = created.strftime('%Y-%m-%d %H:%M:%S')
+
+            print('%d\t\t%s' % (r['id'], created_str))
 
         print()
 
