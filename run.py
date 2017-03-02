@@ -274,8 +274,8 @@ def auto_delete_sets():
         start_time = now - timedelta(days=weeks_ago * 7)
         week_sets = get_sets_within_time(sets, start_time, timedelta(days=7))
         if len(week_sets) > 1:
-            # delete oldest
-            for s in week_sets[1:]:
+            # delete newest
+            for s in week_sets[:-1]:
                 sets_to_delete.append(s['id'])
 
     # handle 1 to 5 months ago, keep one per month
@@ -283,8 +283,8 @@ def auto_delete_sets():
         start_time = now - timedelta(days=months_ago * 30)
         month_sets = get_sets_within_time(sets, start_time, timedelta(days=30))
         if len(month_sets) > 1:
-            # delete oldest
-            for s in month_sets[1:]:
+            # delete newest
+            for s in month_sets[:-1]:
                 sets_to_delete.append(s['id'])
 
 
