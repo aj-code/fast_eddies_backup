@@ -188,7 +188,8 @@ def restore(backup_set_id, exclude_globs, include_globs, output_dir):
 
                 permissions = (r['uid'], r['gid'], r['permissions'])
 
-                new_path = os.path.join(output_dir, dir_name[len(common_path)+1:], name)
+                new_dir = os.path.join(output_dir, dir_name[len(common_path)+1:])
+                new_path = os.path.join(new_dir, name)
 
                 # skip excludes
                 if exclude_globs and matches_any_glob(new_path, exclude_globs):
@@ -198,8 +199,8 @@ def restore(backup_set_id, exclude_globs, include_globs, output_dir):
                 if include_globs and not matches_any_glob(new_path, include_globs):
                     continue
 
-                if not os.path.exists(dir_name): #dir may not exist due to include/exclude checks on dir paths
-                    os.makedirs(dir_name)
+                if not os.path.exists(new_dir): #dir may not exist due to include/exclude checks on dir paths
+                    os.makedirs(new_dir)
 
                 if os.path.exists(new_path):
                     print('File already exists in output directory. Bailing before data overwrite.')
