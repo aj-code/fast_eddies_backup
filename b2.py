@@ -337,15 +337,20 @@ class _B2ThreadedWorker(threading.Thread):
                     print("Requests error")
                     traceback.print_exc()
 
-
             if r is None or (r.status_code != requests.codes.ok
                          and r.status_code != requests.codes.bad_request #400 is unrecoverable, so return it anyway for other code to handle (or not)
-                         and r.status_code != requests.codes.not_found): #404 also unrecoverable
+                         and r.status_code != requests.codes.not_found #404 also unrecoverable
+                         and r.status_code != requests.codes.forbidden): #handled below
+
                 failures += 1
-                self._handle_error(r, failures)
+                self._handle_retry_backoff(r, failures)
 
                 if hasattr(data, 'seek'): #otherwise will upload nothing on retry
                     data.seek(0)
+
+            elif r.status_code == requests.codes.forbidden:
+                print('B2 account cap limit reached or account in bad standing. Please review your B2 account! Backup has failed.')
+                os._exit(1)
 
             else:
                 #reuse auth only on success
@@ -357,7 +362,7 @@ class _B2ThreadedWorker(threading.Thread):
                 return r
 
 
-    def _handle_error(self, r, failures):
+    def _handle_retry_backoff(self, r, failures):
         if failures > 100:
             print('Too many network failures, hard failing!')
             os._exit(1)
