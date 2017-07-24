@@ -1,10 +1,14 @@
 # Fast Eddie's Backup
-A duplicating backup solution for Linux backed by Backblaze B2.
+A opensource backup solution for Linux featuring deduplication, compression,
+local encryption, and backed by Backblaze B2.
 
 Fast Eddie's lets you keep take multiple backups (each backup is called a backup set) while only storing changed data. Backups are 
 incremental by splitting files into chunks and only uploading chunks that haven't been seen before 
 in any file within any backup set. The software is designed for use on relatively modern linux using at least python 3.5
 and to be run regularly via cron (or similar).
+
+All data uploaded to B2 is encrypted before upload using authenticated AES256-GCM.
+
 
 ## Install
 Make sure you've got python 3.5+ and git installed, and an active B2 account.
@@ -77,4 +81,6 @@ Carefully copy and store your keyfile, it's the only way to restore from a backu
 Regularly check for new backup sets to ensure backups are working if you're running Fast Eddie's automatically.
 Semi-regularly run the verifyandclean mode and check the output for errors.
 On occasion do full restore tests to ensure everything is really working.
+No backup solution is bulletproof, this one is no exception and (being opensource) comes with no warranty.
+
 
