@@ -353,8 +353,8 @@ def _delete_set(conn, known_b2_files, backup_set_id):
         if result['count'] == 0: #file not used in other set
             delete_file(cur, f['id'], known_b2_files)
 
-        #delete mapping
-        cur.execute(db.SQL_DELETE_SET_FILE_MAP, (backup_set_id, f['id']))
+    # delete orphaned file mappings
+    cur.execute(db.SQL_DELETE_UNUSED_SET_FILE_MAPS)
 
 
     #del symlinks
@@ -366,8 +366,8 @@ def _delete_set(conn, known_b2_files, backup_set_id):
         if result['count'] == 0: #file not used in other set
             cur.execute(db.SQL_DELETE_SYMLINK, (s['id'],))
 
-        #delete mapping
-        cur.execute(db.SQL_DELETE_SET_SYMLINK_MAP, (backup_set_id, s['id']))
+    #delete orphaned symlink mapping
+    cur.execute(db.SQL_DELETE_UNUSED_SET_SYMLINK_MAPS)
 
     #del dirs
     for d in dir_results:
@@ -378,8 +378,8 @@ def _delete_set(conn, known_b2_files, backup_set_id):
         if result['count'] == 0: #file not used in other set
             cur.execute(db.SQL_DELETE_DIR, (d['id'],))
 
-        #delete mapping
-        cur.execute(db.SQL_DELETE_SET_DIR_MAP, (backup_set_id, d['id']))
+    # delete orphaned dir mapping
+    cur.execute(db.SQL_DELETE_UNUSED_SET_DIR_MAPS)
 
 
     cur.close()
