@@ -1,4 +1,4 @@
-import os, struct, threading, gzip, queue, hashlib, fnmatch
+import os, stat, struct, threading, gzip, queue, hashlib, fnmatch
 from datetime import datetime
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.backends import default_backend
@@ -32,9 +32,18 @@ def get_files(dirs):
         yield path, True, os.path.islink(path)
 
         for root, dirs, files in os.walk(path):
+
             for name in files:
                 abs_name = os.path.join(root, name)
-                yield abs_name, False, os.path.islink(abs_name)
+
+                is_symlink = os.path.islink(abs_name)
+
+                #skip if the file is a socket
+                if not is_symlink and stat.S_ISSOCK(os.stat(abs_name).st_mode):
+                    continue
+
+                yield abs_name, False, is_symlink
+
 
             for name in dirs:
                 abs_name = os.path.join(root, name)
