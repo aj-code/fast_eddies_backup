@@ -191,12 +191,14 @@ def restore(backup_set_id, exclude_globs, include_globs, output_dir):
                 new_dir = os.path.join(output_dir, dir_name[len(common_path)+1:])
                 new_path = os.path.join(new_dir, name)
 
+                old_path = os.path.join(dir_name, name)
+
                 # skip excludes
-                if exclude_globs and matches_any_glob(new_path, exclude_globs):
+                if exclude_globs and matches_any_glob(old_path, exclude_globs):
                     continue
 
                 # skip not included
-                if include_globs and not matches_any_glob(new_path, include_globs):
+                if include_globs and not matches_any_glob(old_path, include_globs):
                     continue
 
                 if not os.path.exists(new_dir): #dir may not exist due to include/exclude checks on dir paths
