@@ -52,13 +52,16 @@ def backup(dirs):
                 dir_cache[name] = set_dir_id
                 continue
 
+            if not os.access(name, os.R_OK):
+                print('WARNING: unreadable file, skipping: ' + name, file=sys.stderr)
+                continue
+
             dir_name = os.path.dirname(name)
             if dir_name not in dir_cache:
                 raise RuntimeError('BUG: set dir id not found in cache, filesystem walk probably wrong order. Failing.')
 
             file_name = os.path.basename(name)
             set_dir_id = dir_cache[dir_name]
-
 
             prev_file = db.get_prev_file(cur, file_name, dir_name, st)
 
