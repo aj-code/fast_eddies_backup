@@ -92,7 +92,7 @@ def dedup_and_store(cur, filepath, file_id):
         block_count = 0
         new_count = 0
 
-        file_hasher = hashlib.sha256()
+        file_hasher = hashlib.sha256() #TODO switch to blake2s or blake2b depending on benchamrk
         while True:
 
             block_data = f.read(BLOCK_SIZE)
@@ -103,7 +103,7 @@ def dedup_and_store(cur, filepath, file_id):
             block_hasher.update(block_data)
             block_hash = block_hasher.digest()[16:]  # only take 128 bits
 
-            file_hasher.update(block_data)
+            file_hasher.update(block_data) #TODO possible optimisation, build file hash by combining all block hashes instead of hashing actual file bytes
 
             block_id, is_new_block = db.find_or_insert_block(cur, block_hash)
 
