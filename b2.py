@@ -165,9 +165,6 @@ class _B2ThreadedWorker(threading.Thread):
         name = task[1]
         source = task[2]
 
-        if self.verbose:
-            print('Beginning upload of ', name)
-
         data_hash = self._sha1(source)
 
         headers = {
@@ -177,9 +174,6 @@ class _B2ThreadedWorker(threading.Thread):
         }
 
         self._request('POST', headers=headers, data=source, is_upload=True)
-
-        if self.verbose:
-            print('Upload complete ', name)
 
 
     def _download(self, task):
