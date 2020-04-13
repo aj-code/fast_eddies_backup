@@ -343,8 +343,8 @@ class _B2ThreadedWorker(threading.Thread):
 
         if self.verbose:
             if r:
-                print('HTTP bad status code %d\n%s' % (r.status_code, r.text))
-            print('Waiting %s seconds for retry' % backoff)
+                print('B2 HTTP status code %d\n%s' % (r.status_code, r.text))
+            print('B2 or network issue, waiting %s seconds for retry' % backoff)
 
         time.sleep(backoff)
 

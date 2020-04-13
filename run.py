@@ -25,6 +25,8 @@ def backup(dirs):
 
     restore_db()
 
+    stat_tracker = StatTracker()
+
     with db.get_db(db_filename) as conn:
         cur = conn.cursor()
 
@@ -42,6 +44,7 @@ def backup(dirs):
             if is_symlink: #handle symlink
                 link_dest = os.readlink(name)
                 db.handle_symlink(cur, backup_set_id, name, link_dest)
+                stat_tracker.inc_file()
                 continue
 
             if is_dir: #save dir permissions
@@ -52,6 +55,9 @@ def backup(dirs):
             if not os.access(name, os.R_OK):
                 print('WARNING: unreadable file, skipping: ' + name, file=sys.stderr)
                 continue
+
+            stat_tracker.inc_file()
+            stat_tracker.inc_bytes_processed(st.st_size)
 
             dir_name = os.path.dirname(name)
             if dir_name not in dir_cache:
@@ -66,7 +72,7 @@ def backup(dirs):
             #note: in future we could optimise for only perm/owner changes by copying file block map in db instead of scanning file
             if not prev_file:
                 file_id = db.insert_file_for_set(cur, backup_set_id, file_name, set_dir_id, st)
-                dedup_and_store(cur, name, file_id)
+                dedup_and_store(cur, stat_tracker, name, file_id)
 
             else: #exact file already exists
 
@@ -79,9 +85,10 @@ def backup(dirs):
 
 
     save_db()
+    stat_tracker.print_stats()
 
 
-def dedup_and_store(cur, filepath, file_id):
+def dedup_and_store(cur, stat_tracker, filepath, file_id):
     with open(filepath, 'rb') as f:
 
         block_count = 0
@@ -106,7 +113,7 @@ def dedup_and_store(cur, filepath, file_id):
 
             if is_new_block:
                 new_count += 1
-                write_block(block_id, block_data)
+                write_block(stat_tracker, block_id, block_data)
 
             block_count += 1
 
@@ -512,12 +519,15 @@ def delete_file(conn, file_id, known_b2_files):
             block_to_delete = set()
 
 
-def write_block(block_id, block_data):
+def write_block(stat_tracker, block_id, block_data):
 
     compressed = gzip.compress(block_data, compresslevel=6)
     encrypted = encrypt_block(key_data['crypto_key'], BLOCK_FORMAT_VERSION, compressed)
 
     b2_threaded.upload(str(block_id), encrypted)
+
+    stat_tracker.inc_uploaded_uncompressed(len(block_data))
+    stat_tracker.inc_uploaded_compressed(len(encrypted))
 
 
 #TODO, delete previous metadata entry in b2
@@ -554,7 +564,8 @@ def save_db():
         enc_db.write(encryptor.tag)
 
     if verbose:
-        print('Metatdata size:', os.stat(enc_db.name).st_size)
+        print('Uploading metadata, size:', os.stat(enc_db.name).st_size)
+        print()
 
     with open(cache_filename, 'rb') as enc_db:
         b2_threaded.wait_on_all_complete() #ensure all blocks are uploaded before metadata, better crash protection

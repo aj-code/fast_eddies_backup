@@ -129,6 +129,16 @@ def read_range(file, start, size):
         yield data
 
 
+def format_bytes(size): # based on https://stackoverflow.com/a/49361727
+    power = 1024
+    n = 0
+    power_labels = {0 : 'bytes', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
+    while size > power:
+        size /= power
+        n += 1
+    return size, power_labels[n]
+
+
 class BlockWriter(threading.Thread):
     def __init__(self, key, block_format_version, verbose=False):
         threading.Thread.__init__(self)
@@ -197,3 +207,35 @@ class BlockWriter(threading.Thread):
 
     def shutdown(self):
         self.queue.put('shutdown')
+
+
+class StatTracker:
+    total_files = 0
+    total_bytes_processed = 0
+    total_bytes_uploaded_uncompressed = 0
+    total_bytes_uploaded_compressed = 0
+
+    def inc_file(self):
+        self.total_files += 1
+
+    def inc_bytes_processed(self, amount):
+        self.total_bytes_processed += amount
+
+    def inc_uploaded_uncompressed(self, amount):
+        self.total_bytes_uploaded_uncompressed += amount
+
+    def inc_uploaded_compressed(self, amount):
+        self.total_bytes_uploaded_compressed += amount
+
+
+    def print_stats(self):
+        processed = format_bytes(self.total_bytes_processed)
+        uncompressed = format_bytes(self.total_bytes_uploaded_uncompressed)
+        compressed = format_bytes(self.total_bytes_uploaded_compressed)
+
+        stats = "Backup Statistics\n"
+        stats += f"\tTotal Files: {self.total_files:,}\n"
+        stats += "\tData Processed: {:.2f}{}\n".format(processed[0], processed[1])
+        stats += "\tData Changed: {:.2f}{}\n".format(uncompressed[0], uncompressed[1])
+        stats += "\tCompressed Data Uploaded: {:.2f}{}\n".format(compressed[0], compressed[1])
+        print(stats)
