@@ -73,6 +73,11 @@ def backup(dirs):
             #check if new file, or perms have changed do normal backup of file
             #note: in future we could optimise for only perm/owner changes by copying file block map in db instead of scanning file
             if not prev_file:
+
+                if verbose and st.st_size > 150 * 1024 * 1024: # print if we're dealing with a large file otherwise there is a long pause in output
+                    print(name)
+                    print('\tProcessing large file...')
+
                 file_id = db.insert_file_for_set(cur, backup_set_id, file_name, set_dir_id, st)
                 dedup_and_store(cur, stat_tracker, name, file_id)
 
