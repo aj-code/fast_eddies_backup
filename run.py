@@ -35,9 +35,6 @@ def backup(dirs):
 
         for name, is_dir, is_symlink in get_files(dirs):
 
-            if verbose:
-                print('Processing', name)
-
             name = os.path.abspath(name)
 
             st = os.stat(name, follow_symlinks=False)
@@ -68,16 +65,14 @@ def backup(dirs):
             #check if new file, or perms have changed do normal backup of file
             #note: in future we could optimise for only perm/owner changes by copying file block map in db instead of scanning file
             if not prev_file:
-                if verbose:
-                    print('File new or changed, backing up')
-
                 file_id = db.insert_file_for_set(cur, backup_set_id, file_name, set_dir_id, st)
                 dedup_and_store(cur, name, file_id)
 
             else: #exact file already exists
 
                 if verbose:
-                    print('File unchanged, updating metadata and continuing')
+                    print(name)
+                    print('\tFile unchanged')
 
                 file_id = prev_file['id']
                 db.map_existing_file_to_set(cur, backup_set_id, file_id)

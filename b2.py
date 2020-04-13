@@ -36,7 +36,7 @@ class B2Threaded:
             self.workers.append(w)
 
         if self.verbose:
-            print('B2 threaded running with %d threads' % threads)
+            print('B2 client running with %d threads' % threads)
 
 
     def upload(self, name, source):
@@ -78,14 +78,8 @@ class B2Threaded:
         for w in self.workers:
             self.task_queue.put('shutdown')
 
-        if self.verbose:
-            print('B2 threaded worker threads shutting down...')
-
         for w in self.workers:
             w.join()
-
-        if self.verbose:
-            print('B2 threaded worker threads shutdown complete.')
 
 
     def wait_on_all_complete(self):
@@ -147,16 +141,11 @@ class _B2ThreadedWorker(threading.Thread):
         name = task[1]
         file_id = task[2]
 
-        if self.verbose:
-            print('Deleting ' + str(name))
-
         url = '/b2api/v2/b2_delete_file_version'
         r = self._request('POST', url=url, json={'fileName':name, 'fileId':file_id}, need_gen_auth=True)
 
         if self.verbose and r and r.status_code == 400 and 'code' in r.json() and r.json()['code'] == 'file_not_present':
             print('File not found, continuing as if deleted: ', name)
-
-        if self.verbose:
 
 
     def _upload(self, task):
@@ -215,9 +204,6 @@ class _B2ThreadedWorker(threading.Thread):
     def _list(self, task):
         future = task[1]
 
-        if self.verbose:
-            print('Getting bucket contents list')
-
         files = []
         req_data = {'bucketId': self._get_bucket_id(), 'maxFileCount': 1000}
         while True:
@@ -234,13 +220,9 @@ class _B2ThreadedWorker(threading.Thread):
                 req_data['startFileId'] = resp_data['nextFileId']
                 req_data['startFileName'] = resp_data['nextFileName']
 
-                if self.verbose:
-                    print('Got', len(files), 'objects so far, continuing')
             else:
                 future.response = files
                 future.lock.release()
-                if self.verbose:
-                    print('Got file list, total',len(files))
                 break
 
 
@@ -271,9 +253,6 @@ class _B2ThreadedWorker(threading.Thread):
             url = '/b2api/v2/b2_get_upload_url'
             r = self._request('POST', url, json={'bucketId': self._get_bucket_id()}, need_gen_auth=True)
 
-            if self.verbose:
-                print('B2 got new auth for upload')
-
             return r.json()
 
 
@@ -285,9 +264,6 @@ class _B2ThreadedWorker(threading.Thread):
 
             url = 'https://api.backblazeb2.com/b2api/v2/b2_authorize_account'
             r = self._request('GET', url=url, auth=HTTPBasicAuth(self.account_id, self.application_key))
-
-            if self.verbose:
-                print('B2 got new auth for general operations')
 
             return r.json()
 

@@ -148,8 +148,6 @@ class BlockWriter(threading.Thread):
             task = self.queue.get()
 
             if task == 'shutdown':
-                if self.verbose:
-                    print('Block writer thread exiting')
                 break
 
             fd = task[0]
@@ -176,6 +174,7 @@ class BlockWriter(threading.Thread):
 
             if self.file_blocks_counter[fd] == total_blocks:
                 self._complete_file(fd, expected_hash, permissions)
+
 
     def _complete_file(self, fd, expected_hash, perms):
 
