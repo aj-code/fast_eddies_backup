@@ -150,14 +150,13 @@ class _B2ThreadedWorker(threading.Thread):
         if self.verbose:
             print('Deleting ' + str(name))
 
-        url = '/b2api/v1/b2_delete_file_version'
+        url = '/b2api/v2/b2_delete_file_version'
         r = self._request('POST', url=url, json={'fileName':name, 'fileId':file_id}, need_gen_auth=True)
 
         if self.verbose and r and r.status_code == 400 and 'code' in r.json() and r.json()['code'] == 'file_not_present':
             print('File not found, continuing as if deleted: ', name)
 
         if self.verbose:
-            print('Deletion complete: ', name)
 
 
     def _upload(self, task):
@@ -223,7 +222,7 @@ class _B2ThreadedWorker(threading.Thread):
         req_data = {'bucketId': self._get_bucket_id(), 'maxFileCount': 1000}
         while True:
 
-            url = '/b2api/v1/b2_list_file_versions'
+            url = '/b2api/v2/b2_list_file_versions'
             r = self._request('POST', url, json=req_data, need_gen_auth=True)
 
             resp_data = r.json()
@@ -251,7 +250,7 @@ class _B2ThreadedWorker(threading.Thread):
         if self.bucket_id:
             return self.bucket_id
 
-        url = '/b2api/v1/b2_list_buckets'
+        url = '/b2api/v2/b2_list_buckets'
         r = self._request('GET', url, params={'accountId': self.account_id}, need_gen_auth=True)
 
         bucket_id = [b['bucketId'] for b in r.json()['buckets'] if b['bucketName'] == self.bucket_name][0]
@@ -269,7 +268,7 @@ class _B2ThreadedWorker(threading.Thread):
             return self.upload_auth.get_nowait()
         except queue.Empty:
 
-            url = '/b2api/v1/b2_get_upload_url'
+            url = '/b2api/v2/b2_get_upload_url'
             r = self._request('POST', url, json={'bucketId': self._get_bucket_id()}, need_gen_auth=True)
 
             if self.verbose:
@@ -284,7 +283,7 @@ class _B2ThreadedWorker(threading.Thread):
             return self.general_auth.get_nowait()
         except queue.Empty:
 
-            url = 'https://api.backblazeb2.com/b2api/v1/b2_authorize_account'
+            url = 'https://api.backblazeb2.com/b2api/v2/b2_authorize_account'
             r = self._request('GET', url=url, auth=HTTPBasicAuth(self.account_id, self.application_key))
 
             if self.verbose:
