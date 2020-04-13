@@ -341,14 +341,14 @@ class _B2ThreadedWorker(threading.Thread):
         else:
             backoff = 2 ** failures - 1
 
-        if self.verbose:
+        if self.verbose and failures > 2:
             if r:
                 print('B2 HTTP status code %d\n%s' % (r.status_code, r.text))
             print('B2 or network issue, waiting %s seconds for retry' % backoff)
 
         time.sleep(backoff)
 
-        if self.verbose:
+        if self.verbose and failures > 2:
             print('Retrying...')
 
 
