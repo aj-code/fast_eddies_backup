@@ -52,7 +52,9 @@ def backup(dirs):
                 dir_cache[name] = set_dir_id
                 continue
 
-            if not os.access(name, os.R_OK):
+            try:
+               with open(name, 'rb') as f: pass
+            except PermissionError:
                 print('WARNING: unreadable file, skipping: ' + name, file=sys.stderr)
                 continue
 
