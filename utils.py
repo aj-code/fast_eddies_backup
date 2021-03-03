@@ -145,7 +145,7 @@ class BlockWriter(threading.Thread):
 
         self.verbose = verbose
 
-        self.queue = queue.Queue()
+        self.queue = queue.Queue(2000) #2000 * 256KB blocks == 500MB max
         self.key = key
         self.block_format_version = block_format_version
         self.file_blocks_counter = {}
