@@ -168,7 +168,7 @@ def restore(backup_set_id, exclude_globs, include_globs, output_dir):
             uid = r['uid']
             permissions = r['permissions']
 
-            #skip exludes
+            #skip excludes
             if exclude_globs and matches_any_glob(name, exclude_globs):
                 continue
 
@@ -234,7 +234,7 @@ def restore(backup_set_id, exclude_globs, include_globs, output_dir):
                     fd.seek(0)
 
                 file_offset = 0
-                for br in block_results: #block_results must be sorted
+                for br in block_results: #block_results must be sorted here, this is done earlier in sql query
                     block_id = br['block_id']
 
                     future = b2_threaded.download(block_id, stream=False)

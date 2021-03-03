@@ -318,7 +318,7 @@ class _B2ThreadedWorker(threading.Thread):
                     data.seek(0)
 
             elif r.status_code == requests.codes.forbidden:
-                print('B2 account cap limit reached or account in bad standing. Please review your B2 account! Backup has failed.')
+                print('B2 account cap limit reached or account in bad standing. Please review your B2 account! Operation has failed.')
                 os._exit(1)
 
             else:
