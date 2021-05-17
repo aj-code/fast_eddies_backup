@@ -470,7 +470,9 @@ def verify_and_clean(delete_unrecoverable):
             print("The following files and sets are affected:")
             for b_id in missing:
                 for f in conn.execute(db.SQL_SELECT_FILE_BY_BLOCK, (b_id,)).fetchall():
-                    print('Set(%d): %s' % (f['backup_set_id'], f['name']))
+                    for s in conn.execute(db.SQL_SELECT_SETS_BY_FILE, (f['id'],)).fetchall():
+                        print('Set(%d): %s' % (s['set_id'], f['name']))
+
                     if delete_unrecoverable:
                         print('\tdeleting file.')
                         delete_file(conn, f['id'], known_b2_files)
