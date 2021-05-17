@@ -423,7 +423,7 @@ def verify_and_clean(delete_unrecoverable):
         known_b2_files = {}
         for f in b2_files:
 
-            #check of multiple uploads, delete oldest. Will happen on failed backup, and normally with metadata upload
+            #check for multiple uploads, delete oldest. Will happen on failed backup, and normally with metadata upload
             known_b2_files.setdefault(f.name, []).append(f)
             if len(known_b2_files[f.name]) > 1:
                 if verbose:
@@ -463,10 +463,11 @@ def verify_and_clean(delete_unrecoverable):
                   "verify again.")
             print()
             print("Otherwise, an immediate backup into a NEW bucket is recommended to ensure at least one backup is available.")
-            print("Future backups based on this set will be corrupt unless fixed with the RISKY --delete-unrecoverable "
-                  "switch, which you should only do if you really know what you're doing.")
+            print("Future backups based on this current set will be corrupt unless fixed with the RISKY --delete-unrecoverable "
+                  "switch, which you should only do if you really know what you're doing as it will throw away all data relating"
+                  "to partially backed-up files.")
             print()
-            print("The following files are affected:")
+            print("The following files and sets are affected:")
             for b_id in missing:
                 for f in conn.execute(db.SQL_SELECT_FILE_BY_BLOCK, (b_id,)).fetchall():
                     print('Set(%d): %s' % (f['backup_set_id'], f['name']))

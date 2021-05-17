@@ -99,7 +99,7 @@ def create_table(conn):
 	"""
     conn.execute(sql)
 
-    #TODO optimise these with indexes as needed
+
     sql = """CREATE TABLE set_file_map (
     			id INTEGER PRIMARY KEY,
     			set_id INTEGER,
